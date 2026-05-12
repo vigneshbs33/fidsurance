@@ -1,0 +1,52 @@
+{
+  "model_version": "v2",
+  "features": [
+    "age",
+    "bmi",
+    "hba1c",
+    "bp_systolic",
+    "smoker",
+    "diabetes",
+    "prediabetes",
+    "hypertension",
+    "chronic_count"
+  ],
+  "risk_tiers": {
+    "0": "Low",
+    "1": "Medium",
+    "2": "High",
+    "3": "Critical"
+  },
+  "macro_auc_roc": 0.9904,
+  "prevalence": {
+    "diabetes_pct": 20.2,
+    "prediabetes_pct": 31.5,
+    "hypertension_pct": 23.7,
+    "smoking_pct": 19.8
+  },
+  "demo_scenario": {
+    "input": {
+      "age": 35,
+      "bmi": 26.5,
+      "hba1c": 6.2,
+      "bp_systolic": 128,
+      "smoker": 0,
+      "diabetes": 0,
+      "prediabetes": 1,
+      "hypertension": 0,
+      "chronic_count": 1
+    },
+    "predicted_tier": "Medium",
+    "probabilities": {
+      "Low": 0.421,
+      "Medium": 0.579,
+      "High": 0.0,
+      "Critical": 0.0
+    }
+  },
+  "fastapi_usage": {
+    "note": "prediabetes is derived \u2014 compute it in FastAPI before passing to model",
+    "derive_prediabetes": "prediabetes = 1 if (5.7 <= hba1c < 6.5 and diabetes == 0) else 0",
+    "derive_chronic_count": "chronic_count = diabetes + hypertension + smoker + prediabetes + (any_other_conditions)"
+  }
+}
