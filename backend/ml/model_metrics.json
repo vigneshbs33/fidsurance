@@ -1,30 +1,30 @@
 {
-  "accuracy": 0.9945,
-  "weighted_f1": 0.9945,
+  "accuracy": 0.8661,
+  "weighted_f1": 0.8664,
   "per_class_f1": {
-    "Critical": 0.9938,
-    "High": 0.9908,
-    "Low": 0.9976,
-    "Medium": 0.9943
+    "Critical": 0.9061,
+    "High": 0.8325,
+    "Low": 0.9099,
+    "Medium": 0.821
   },
   "feature_importances": {
-    "has_diabetes": 0.3214,
-    "chronic_count": 0.3099,
-    "hba1c": 0.1325,
-    "bp_systolic": 0.0563,
-    "smoker": 0.0451,
-    "metabolic_risk_score": 0.0371,
-    "age": 0.0328,
-    "has_hypertension": 0.0288,
-    "bmi_age_interaction": 0.0202,
-    "bmi": 0.0159
+    "chronic_count": 0.3818,
+    "has_diabetes": 0.346,
+    "hba1c": 0.1148,
+    "smoker": 0.0364,
+    "bp_systolic": 0.0336,
+    "metabolic_risk_score": 0.0244,
+    "has_hypertension": 0.0226,
+    "age": 0.0194,
+    "bmi_age_interaction": 0.012,
+    "bmi": 0.009
   },
   "cv_f1_scores": [
-    0.992246201936409,
-    0.9934971510779842,
-    0.9937489514250331,
-    0.9940001873964248,
-    0.9930005036210623
+    0.8724895990149482,
+    0.8728978399249052,
+    0.8697559228146438,
+    0.8718781681670648,
+    0.8679027491155182
   ],
-  "cv_f1_mean": 0.9933
+  "cv_f1_mean": 0.871
 }
