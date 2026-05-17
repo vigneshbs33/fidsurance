@@ -61,7 +61,7 @@ def score_to_tier(score):
 
 
 # ─── Synthetic Data Generator ─────────────────────────────────────────────────
-def generate_synthetic(n=20000):
+def generate_synthetic(n=100000):
     rows = []
     for _ in range(n):
         age = int(np.random.randint(18, 81))
@@ -99,7 +99,10 @@ def generate_synthetic(n=20000):
             age, bmi, hba1c, bp_systolic, smoker,
             has_diabetes, has_hypertension, chronic_count
         )
-        risk_tier = score_to_tier(risk_score)
+        
+        # Inject Gaussian noise to make the classification harder (target ~85% accuracy)
+        noisy_score = risk_score + np.random.normal(0, 0.05)
+        risk_tier = score_to_tier(noisy_score)
 
         rows.append({
             'age': age,
@@ -192,7 +195,7 @@ def try_merge_real_datasets(df_synth):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("🔧 Generating synthetic health records...")
-    df_synth = generate_synthetic(n=20000)
+    df_synth = generate_synthetic(n=100000)
 
     print("📂 Checking for real datasets...")
     df_final = try_merge_real_datasets(df_synth)

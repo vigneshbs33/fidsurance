@@ -45,7 +45,7 @@ npx expo start
 
 ## 📂 Key Files
 - `Fidsurance_Master_Plan.md`: The complete architectural blueprint and ML metrics. Read this to understand how the app works.
-- `ML_Plan.md`: Details about the synthetic data and XGBoost model.
+- `ML_Details.md`: Details about the synthetic data and XGBoost model.
 - `UI_Context.md`: **Important document for UI/UX designers joining the project.**
 
 ---

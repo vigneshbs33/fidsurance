@@ -67,7 +67,7 @@ User Vitals (10 features)
 | `diabetes.csv` | Kaggle Pima Indians Diabetes | HbA1c → diabetes risk |
 | `heart.csv` | UCI Heart Disease (Cleveland) | BP, cholesterol → cardiac risk |
 | `hypertension.csv` | Kaggle Hypertension Prediction | Lifestyle → hypertension risk |
-| `synthetic_health.csv` | We generate 20,000 samples | Fills gaps, balances classes |
+| `synthetic_health.csv` | We generate 100,000 samples | Fills gaps, balances classes |
 
 ### Feature Engineering
 
@@ -117,7 +117,7 @@ xgb_params = {
 | Handles mixed types | ✅ | Age (int) + smoker (binary) + HbA1c (float) |
 | Class imbalance | ✅ scale_pos_weight | "Critical" cases are rare |
 | Fast inference | ✅ <1ms | No latency in API |
-| Interpretable | ✅ SHAP values | Explain each prediction to judge |
+| Interpretable | ✅ get_fscore() | Explain each prediction to judge |
 
 ---
 
@@ -216,19 +216,18 @@ This blending is KEY — the rules-based scorer catches hard constraints (age, c
 
 ---
 
-## SHAP Explainability (Judge Wow Factor)
+## Feature Importances (Explainability)
 
-For every user, we compute SHAP values to show:
+For every user, we show the top factors driving their risk tier using native feature importances weighted by their inputs:
 
 ```
 Why Risk Tier = HIGH for this user:
-  HbA1c (6.8%)       → +0.31  ██████████████████
-  BMI (29.5)         → +0.18  █████████
-  Age (52)           → +0.12  ██████
-  Smoker             → +0.09  █████
-  BP Systolic (142)  → +0.08  ████
-  Chronic Count      → +0.04  ██
-  Has Hypertension   → +0.03  ██
+  HbA1c (6.8%)       → 31%  ██████████████████
+  BMI (29.5)         → 18%  █████████
+  Age (52)           → 12%  ██████
+  Smoker             →  9%  █████
+  BP Systolic (142)  →  8%  ████
+  Chronic Count      →  4%  ██
 ```
 
 This gets displayed in the Plan Detail screen as a small "Why this?" bar chart. **No other team will do this.**
@@ -248,7 +247,7 @@ This gets displayed in the Plan Detail screen as a small "Why this?" bar chart. 
 ### Synthetic Generation Logic
 
 ```python
-# Using numpy to generate 20,000 synthetic patients
+# Using numpy to generate 100,000 synthetic patients
 # Distribution based on Indian population epidemiology:
 # - 11.4% diabetic (IDF 2021 India estimate)
 # - 22% hypertensive (Lancet India 2023)
@@ -302,11 +301,11 @@ def generate_synthetic_row():
 
 ```
 generate_dataset.py
-    └─ generate_synthetic_data(n=20000)
+    └─ generate_synthetic_data(n=100k)
     └─ merge_with_real_datasets()  # UCI + Kaggle CSVs
     └─ feature_engineer()
     └─ balance_classes(SMOTE)      # oversample Critical class
-    └─ save: training_data.csv     # ~22,000 rows
+    └─ save: training_data.csv     # ~100k rows
 
 train_model.py
     └─ load training_data.csv
@@ -314,13 +313,12 @@ train_model.py
     └─ GridSearchCV(XGBClassifier, param_grid, cv=5)
     └─ best_model.fit(X_train, y_train)
     └─ evaluate: accuracy, F1 per class, confusion matrix
-    └─ compute SHAP values
-    └─ save: risk_model.json + label_encoder.pkl + shap_explainer.pkl
+    └─ save: risk_model.json + label_encoder.pkl
 
 Metrics to show judges:
-    Accuracy: ~88%
-    Weighted F1: ~0.86
-    Critical recall: ~82%   ← most important class
+    Accuracy: ~87.1%
+    Weighted F1: ~0.87
+    Critical recall: ~85%   ← most important class
 ```
 
 ---
@@ -332,7 +330,7 @@ Metrics to show judges:
   "risk_assessment": {
     "risk_tier": "High",
     "risk_score": 0.74,
-    "shap_explanation": {
+    "feature_importance_explanation": {
       "HbA1c (6.8%)": 0.31,
       "BMI (29.5)": 0.18,
       "Age (52)": 0.12

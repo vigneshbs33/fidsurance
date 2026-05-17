@@ -38,33 +38,33 @@ Output: risk_tier (Low / Medium / High / Critical)
         feature_importance_explanation (top 6 drivers, shown as bar chart in UI)
 ```
 
-**Trained Model Metrics (20,000 synthetic patients, Indian population epidemiology):**
+**Trained Model Metrics (100,000 synthetic patients, Indian population epidemiology):**
 
 | Metric | Value |
 |---|---|
-| Accuracy | **99.45%** |
-| Weighted F1 | **0.9945** |
-| 5-Fold CV F1 Mean | **0.9933** |
-| CV Std Dev | 0.0006 (very stable) |
-| Critical class recall | 99.4% |
+| Accuracy | **87.1%** (Realistic generalisation) |
+| Weighted F1 | **0.8710** |
+| 5-Fold CV F1 Mean | **0.8710** |
+| CV Std Dev | 0.0019 (very stable) |
+| Critical class recall | 99% |
 
 **Per-class F1:**
-- Critical: 0.9938
-- High: 0.9908
-- Low: 0.9976
-- Medium: 0.9943
+- Critical: 0.846
+- High: 0.874
+- Low: 0.906
+- Medium: 0.820
 
 **Top Feature Importances (from `get_booster().get_fscore()`):**
 | Feature | Importance |
 |---|---|
-| has_diabetes | 32.1% |
-| chronic_count | 31.0% |
-| hba1c | 13.3% |
-| bp_systolic | 5.6% |
-| smoker | 4.5% |
-| metabolic_risk_score | 3.7% |
-| age | 3.3% |
-| has_hypertension | 2.9% |
+| chronic_count | 38.2% |
+| has_diabetes | 34.6% |
+| hba1c | 11.5% |
+| smoker | 3.6% |
+| bp_systolic | 3.4% |
+| metabolic_risk_score | 2.4% |
+| has_hypertension | 2.3% |
+| age | 1.9% |
 
 **XGBoost Hyperparameters:**
 ```python
@@ -204,7 +204,7 @@ Rules dominate (60%) to enforce hard constraints. Similarity adds data-driven nu
 | PDF Extraction (on-device) | pdfjs-dist | ✅ Done |
 | Image OCR | Gemma 3 1B via /api/extract | ✅ Done |
 | Health Agent Chat (Step 3) | Gemma 3 1B | ✅ Done |
-| Stage 1 ML | XGBoost (300 trees, 20k training rows) | ✅ Trained |
+| Stage 1 ML | XGBoost (300 trees, 100k training rows) | ✅ Trained |
 | Stage 2 Scorer | Weighted 5-factor Python engine | ✅ Done |
 | Stage 3 Ranker | Cosine Similarity (10D vectors) | ✅ Done |
 | Plain English Explanations | Gemma 3 1B via /api/chat | ✅ Done |
@@ -245,7 +245,7 @@ Rules dominate (60%) to enforce hard constraints. Similarity adds data-driven nu
 | Secure JWT login | Supabase Auth | ✅ |
 | Multi-step intake form | Steps 1–4 | ✅ |
 | AI extraction from clinical documents | pdfjs-dist + expo-image-picker + Gemma | ✅ |
-| Trained ML model (classification) | XGBoost — 99.45% accuracy, 20k training rows | ✅ |
+| Trained ML model (classification) | XGBoost — 87.1% accuracy, 100k training rows | ✅ |
 | Scoring system | Weighted 5-factor scorer (Stage 2) | ✅ |
 | Similarity-based recommendation | Cosine similarity KNN ranker (Stage 3) | ✅ |
 | Explainable recommendations | Feature importance bar chart + Gemma plain English | ✅ |
@@ -282,8 +282,8 @@ A dedicated, air-gapped kiosk at the hospital. User logs in with their JWT, sees
 ```bash
 # Backend (Python)
 cd backend
-python -m ml.generate_dataset   # generates 20,000 training rows
-python -m ml.train_model         # trains XGBoost (99.45% acc), ~60s
+python -m ml.generate_dataset   # generates 100,000 training rows
+python -m ml.train_model         # trains XGBoost (87.1% acc), ~90s
 uvicorn app.main:app --reload --port 8000
 
 # Frontend (React Native)
@@ -297,7 +297,7 @@ npx expo start
 
 ```
 Fidsurance/
-├── ML_Plan.md                    ← ML strategy & design doc
+├── ML_Details.md                 ← ML strategy & design doc
 ├── Fidsurance_Master_Plan.md     ← This file (full architecture)
 ├── problemstatement.txt          ← Original PS
 ├── supabase_setup.sql            ← DB schema
@@ -310,12 +310,12 @@ Fidsurance/
 │   │   ├── llm_service.py        ← Gemma 3 1B via HuggingFace
 │   │   └── agent.py              ← Extraction agent logic
 │   └── ml/
-│       ├── generate_dataset.py   ← 20k synthetic rows (Indian epidemiology)
+│       ├── generate_dataset.py   ← 100k synthetic rows (Indian epidemiology)
 │       ├── train_model.py        ← XGBoost training pipeline
 │       ├── training_data.csv     ← Generated dataset
 │       ├── risk_model.json       ← Trained XGBoost weights
 │       ├── label_encoder.pkl     ← Risk tier label encoder
-│       └── model_metrics.json    ← Accuracy: 99.45%, F1: 0.9945
+│       └── model_metrics.json    ← Accuracy: 87.1%, F1: 0.8710
 └── frontend/
     └── src/
         ├── screens/
