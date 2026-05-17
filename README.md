@@ -87,7 +87,6 @@ Response:
 - `Fidsurance_Master_Plan.md` — Complete architectural blueprint, ML metrics, and agent design.
 - `ML_Details.md` — XGBoost training pipeline and synthetic dataset details.
 - `UI_Context.md` — Frontend context for UI/UX engineers.
-- `Plans_Data_Entry_Guide.md` — How to add new insurance plans.
 
 ---
 
