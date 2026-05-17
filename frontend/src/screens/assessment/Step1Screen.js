@@ -10,6 +10,8 @@ export default function Step1Screen({ navigation, route }) {
   const [city, setCity] = useState('Bangalore');
   const [incomeLakh, setIncomeLakh] = useState('8');
   const [budget, setBudget] = useState('1000');
+  const [coverageFor, setCoverageFor] = useState('Individual');
+  const [familyMembers, setFamilyMembers] = useState('3');
 
   function handleNext() {
     const assessmentDraft = {
@@ -19,6 +21,8 @@ export default function Step1Screen({ navigation, route }) {
       city,
       income_lakh: parseFloat(incomeLakh) || 8,
       monthly_budget: parseFloat(budget) || 1000,
+      coverage_for: coverageFor,
+      family_members: coverageFor === 'Family' ? parseInt(familyMembers) || 3 : 1,
     };
     navigation.navigate('Step2', { assessmentDraft });
   }
@@ -74,6 +78,29 @@ export default function Step1Screen({ navigation, route }) {
             </TouchableOpacity>
           ))}
         </View>
+
+        <Text className="text-[#757575] mb-2 ml-1">Coverage For</Text>
+        <View className="flex-row mb-4">
+          {['Individual', 'Family'].map(c => (
+            <TouchableOpacity 
+              key={c}
+              onPress={() => setCoverageFor(c)}
+              className={`flex-1 py-3 border border-[#E0E0E0] items-center ${coverageFor === c ? 'bg-[#E8F5E9] border-[#4CAF50]' : 'bg-white'} ${c === 'Individual' ? 'rounded-l-xl' : ''} ${c === 'Family' ? 'rounded-r-xl' : ''}`}
+            >
+              <Text className={`${coverageFor === c ? 'text-[#1B5E20] font-bold' : 'text-[#757575]'}`}>{c}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {coverageFor === 'Family' && (
+          <View>
+            <Text className="text-[#757575] mb-2 ml-1">Total Family Members (including you)</Text>
+            <TextInput 
+              className="bg-white border border-[#E0E0E0] rounded-xl px-4 py-3 mb-4 text-[#212121]"
+              value={familyMembers} onChangeText={setFamilyMembers} keyboardType="numeric"
+            />
+          </View>
+        )}
 
         <Text className="text-[#757575] mb-2 ml-1">Annual Income (₹ Lakhs)</Text>
         <TextInput 

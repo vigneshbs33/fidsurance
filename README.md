@@ -43,10 +43,51 @@ npx expo start
 
 ---
 
+## API Endpoints
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/api/health` | Backend status (model loaded, plan count) |
+| `GET` | `/api/plans` | All 20 insurance plans |
+| `POST` | `/api/assess` | **3-stage ML pipeline** — returns risk tier + top 5 plans with warning flags |
+| `POST` | `/api/agent` | **Master Orchestration Agent** — natural language, 6 tools (reassess / budget_sim / stress_test / compare / explain_risk / plan_info) |
+| `POST` | `/api/chat` | Simple conversational chat (no tool execution) |
+| `POST` | `/api/extract` | Gemma extracts health values from PDF text or image |
+| `POST` | `/api/stress-test` | Emergency cost simulation (7 scenarios) |
+
+### Using `/api/agent`
+
+```json
+POST /api/agent
+{
+  "messages": [
+    { "role": "user", "content": "What if I also have kidney disease?" }
+  ],
+  "session": {
+    "profile":       { "age": 35, "hba1c": 6.8, "monthly_budget": 1200, ... },
+    "risk_data":     { "risk_tier": "High", "confidence_pct": 74, ... },
+    "current_plans": [ ... ]
+  }
+}
+```
+
+Response:
+```json
+{
+  "response":        "With kidney disease added, your risk tier has moved to Critical...",
+  "tool_used":       "reassess",
+  "tool_result":     { "risk_assessment": {...}, "recommended_plans": [...] },
+  "updated_session": { "profile": {...}, "risk_data": {...}, "current_plans": [...] }
+}
+```
+
+---
+
 ## 📂 Key Files
-- `Fidsurance_Master_Plan.md`: The complete architectural blueprint and ML metrics. Read this to understand how the app works.
-- `ML_Details.md`: Details about the synthetic data and XGBoost model.
-- `UI_Context.md`: **Important document for UI/UX designers joining the project.**
+- `Fidsurance_Master_Plan.md` — Complete architectural blueprint, ML metrics, and agent design.
+- `ML_Details.md` — XGBoost training pipeline and synthetic dataset details.
+- `UI_Context.md` — Frontend context for UI/UX engineers.
+- `Plans_Data_Entry_Guide.md` — How to add new insurance plans.
 
 ---
 

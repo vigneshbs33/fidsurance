@@ -16,6 +16,8 @@ export default function DashboardScreen({ navigation, route }) {
   ]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [simulatedBudget, setSimulatedBudget] = useState(initialProfile?.monthly_budget || 5000);
+  const [isSimulating, setIsSimulating] = useState(false);
   const scrollViewRef = useRef();
 
   if (!result) {
@@ -57,6 +59,28 @@ export default function DashboardScreen({ navigation, route }) {
       setMessages(prev => [...prev, { role: 'agent', text: "I'm having trouble connecting right now. Generally, higher coverage increases premiums while protecting against major surgeries." }]);
     } finally {
       setIsTyping(false);
+    }
+  };
+
+  const handleSimulateBudget = async (newBudget) => {
+    setSimulatedBudget(newBudget);
+    setIsSimulating(true);
+    try {
+      const BACKEND_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/api' : 'http://localhost:8000/api';
+      const updatedProfile = { ...profile, monthly_budget: newBudget };
+      setProfile(updatedProfile);
+      
+      const response = await fetch(`${BACKEND_URL}/assess`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedProfile)
+      });
+      const data = await response.json();
+      setPlans(data.recommended_plans);
+    } catch (e) {
+      console.warn("Simulation failed", e);
+    } finally {
+      setIsSimulating(false);
     }
   };
 
@@ -111,9 +135,38 @@ export default function DashboardScreen({ navigation, route }) {
                   </View>
                 ))}
               </View>
+              <View className="mt-3 border-t border-black/10 pt-3 flex-row justify-between items-center">
+                <Text className="text-xs" style={{ color: tc.text }}>Model Confidence</Text>
+                <Text className="text-sm font-bold" style={{ color: tc.text }}>{riskData.confidence_pct || 90}%</Text>
+              </View>
             )}
           </View>
         )}
+
+        {/* Affordability Simulator */}
+        <View className="bg-white rounded-3xl p-5 mb-5 border border-[#E0E0E0] shadow-sm">
+          <Text className="text-[#212121] font-bold mb-1">Affordability Simulator</Text>
+          <Text className="text-[#757575] text-xs mb-4">Adjust your monthly budget to see different plans</Text>
+          <View className="flex-row items-center justify-between bg-[#F4F6F4] rounded-2xl p-2">
+            <TouchableOpacity 
+              onPress={() => handleSimulateBudget(Math.max(1000, simulatedBudget - 1000))}
+              className="w-10 h-10 bg-white rounded-full items-center justify-center shadow-sm"
+            >
+              <Text className="text-[#1B5E20] font-bold text-xl">-</Text>
+            </TouchableOpacity>
+            <View className="items-center">
+              <Text className="text-[#1B5E20] font-bold text-xl">₹{simulatedBudget.toLocaleString()}</Text>
+              <Text className="text-[#757575] text-xs">/month</Text>
+            </View>
+            <TouchableOpacity 
+              onPress={() => handleSimulateBudget(Math.min(20000, simulatedBudget + 1000))}
+              className="w-10 h-10 bg-white rounded-full items-center justify-center shadow-sm"
+            >
+              <Text className="text-[#1B5E20] font-bold text-xl">+</Text>
+            </TouchableOpacity>
+          </View>
+          {isSimulating && <ActivityIndicator size="small" color="#1B5E20" className="mt-3" />}
+        </View>
 
         <Text className="text-xl font-bold text-[#1B5E20] mb-2">Top Matches for Your Profile</Text>
         <Text className="text-[#757575] mb-5 text-sm leading-5">Scored by 3-stage ML: XGBoost risk → weighted suitability → cosine similarity blend.</Text>

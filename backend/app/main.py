@@ -1,10 +1,7 @@
 import os
-import json
 import joblib
-import numpy as np
 import pandas as pd
 import xgboost as xgb
-import shap
 from dotenv import load_dotenv
 import jwt
 from fastapi import FastAPI, HTTPException, Request
@@ -17,6 +14,8 @@ load_dotenv()
 from .plans_db import INSURANCE_PLANS
 from .scorer import rank_plans
 from .llm_service import load_model, generate_text
+from .stress_test import simulate
+from .agent import run_agent
 
 app = FastAPI(title="Fidsurance API", version="2.0")
 
@@ -116,6 +115,8 @@ class UserProfile(BaseModel):
     has_diabetes: Optional[bool] = None
     prediabetes: Optional[bool] = False
     has_hypertension: Optional[bool] = None
+    coverage_for: Optional[str] = 'Individual'
+    family_members: Optional[int] = 1
 
 class ExtractionRequest(BaseModel):
     raw_text: Optional[str] = None
@@ -160,11 +161,9 @@ def assess_risk(profile: UserProfile):
         proba     = risk_model.predict_proba(X)[0]
         risk_score = float(max(proba))
 
-        # Feature-importance-weighted explanation:
-        # Multiply normalised feature importance by how "abnormal" each value is
+        # Feature-importance-weighted explanation
         explanation = {}
         for feat in FEATURES:
-            val = float(X[feat].iloc[0])
             imp = feature_importances.get(feat, feature_importances.get(f'f{FEATURES.index(feat)}', 0.0))
             label = FEATURE_LABELS.get(feat, feat)
             explanation[label] = round(imp, 4)
@@ -198,8 +197,8 @@ def health_check():
     return {
         "status": "ok",
         "ml_model": "XGBoost" if risk_model else "heuristic-fallback",
-        "shap": "enabled" if shap_explainer else "disabled",
         "llm": "Gemma 3 1B",
+        "agent": "enabled",
         "plans": len(INSURANCE_PLANS),
     }
 
@@ -266,10 +265,72 @@ def assess_user(profile: UserProfile, request: Request):
         "risk_assessment": {
             "risk_tier": risk_tier,
             "risk_score": risk_score,
+            "confidence_pct": round(risk_score * 100),
             "feature_importance_explanation": shap_explanation,
         },
         "recommended_plans": top_plans,
     }
+
+
+class AgentRequest(BaseModel):
+    messages: List[ChatMessage]
+    session: Dict[str, Any]  # {profile, risk_data, current_plans}
+
+class StressTestRequest(BaseModel):
+    plan_id: int
+    scenario_id: str
+
+def _assess_risk_dict(profile_dict: dict):
+    """Dict-compatible wrapper around assess_risk for the agent layer."""
+    allowed = set(UserProfile.__fields__.keys())
+    cleaned = {k: v for k, v in profile_dict.items() if k in allowed}
+    return assess_risk(UserProfile(**cleaned))
+
+
+@app.post("/api/agent")
+def master_agent_endpoint(req: AgentRequest, request: Request):
+    """
+    Master Orchestration Agent — handles all post-assessment operations
+    through natural language.
+
+    Tools available:
+      reassess     — re-run 3-stage ML pipeline (with updated conditions/budget)
+      budget_sim   — re-rank plans for a new monthly budget
+      stress_test  — emergency out-of-pocket cost simulation
+      compare      — side-by-side plan comparison table
+      explain_risk — plain-English risk tier explanation
+      plan_info    — detailed plan lookup
+
+    Request body:
+      messages: [{role: "user"|"assistant", content: "..."}]
+      session:  {profile: {...}, risk_data: {...}, current_plans: [...]}
+
+    Returns:
+      response, tool_used, tool_result, updated_session
+    """
+    verify_jwt(request)  # soft-fail in demo mode
+
+    messages = [{"role": m.role, "content": m.content} for m in req.messages]
+
+    result = run_agent(
+        messages=messages,
+        session=req.session,
+        risk_assessee=_assess_risk_dict,
+        plan_ranker=rank_plans,
+        llm_generate=generate_text,
+    )
+    return result
+
+
+@app.post("/api/stress-test")
+def run_stress_test(req: StressTestRequest):
+    plan = next((p for p in INSURANCE_PLANS if p["id"] == req.plan_id), None)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    result = simulate(plan, req.scenario_id)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 @app.post("/api/extract")

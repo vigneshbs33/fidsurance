@@ -35,7 +35,10 @@ export default function CompareScreen({ route, navigation }) {
             <View className="h-16 justify-center"><Text className="text-[#757575] font-bold">Plan Type</Text></View>
             <View className="h-16 justify-center"><Text className="text-[#757575] font-bold">Pre-existing Wait</Text></View>
             <View className="h-16 justify-center"><Text className="text-[#757575] font-bold">Diabetes Day 1</Text></View>
+            <View className="h-16 justify-center"><Text className="text-[#757575] font-bold">Co-payment</Text></View>
+            <View className="h-16 justify-center"><Text className="text-[#757575] font-bold">Room Rent</Text></View>
             <View className="h-24 justify-center"><Text className="text-[#757575] font-bold">Pros</Text></View>
+            <View className="h-24 justify-center"><Text className="text-[#757575] font-bold">Exclusions</Text></View>
           </View>
 
           {/* Plan Columns */}
@@ -63,9 +66,20 @@ export default function CompareScreen({ route, navigation }) {
                   {plan.diabetes_day1 ? "✅ Yes" : "❌ No"}
                 </Text>
               </View>
+              <View className="h-16 justify-center border-t border-[#F4F6F4]">
+                <Text className="text-[#212121]">{plan.copayment_pct || 0}%</Text>
+              </View>
+              <View className="h-16 justify-center border-t border-[#F4F6F4]">
+                <Text className="text-[#212121] text-xs">{plan.room_rent_limit || "Single Private"}</Text>
+              </View>
               <View className="h-24 justify-start pt-2 border-t border-[#F4F6F4]">
                 {plan.pros && plan.pros.slice(0, 2).map((pro, i) => (
-                  <Text key={i} className="text-[#212121] text-xs mb-1">• {pro}</Text>
+                  <Text key={i} className="text-[#212121] text-xs mb-1" numberOfLines={2}>• {pro}</Text>
+                ))}
+              </View>
+              <View className="h-24 justify-start pt-2 border-t border-[#F4F6F4]">
+                {plan.exclusions && plan.exclusions.slice(0, 2).map((exc, i) => (
+                  <Text key={i} className="text-[#E64A19] text-xs mb-1" numberOfLines={2}>✗ {exc}</Text>
                 ))}
               </View>
               

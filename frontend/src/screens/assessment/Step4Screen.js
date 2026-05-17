@@ -74,12 +74,24 @@ export default function Step4Screen({ navigation, route }) {
     }
   }
 
-  function EditableRow({ label, value, onChange }) {
+  function EditableRow({ label, value, onChange, extractedValue }) {
+    let confColor = '#F9A825'; // Warning (edited or missing)
+    let confText = '⚠ Review';
+    if (value && value === extractedValue?.toString()) {
+      confColor = '#4CAF50'; // High confidence (matches AI extraction)
+      confText = '✓ High';
+    }
+
     return (
-      <View className="flex-row justify-between items-center bg-white p-4 rounded-xl border border-[#E0E0E0] mb-3">
-        <Text className="text-[#757575] text-base flex-1">{label}</Text>
+      <View className="bg-white p-4 rounded-xl border border-[#E0E0E0] mb-3">
+        <View className="flex-row justify-between items-center mb-2">
+          <Text className="text-[#757575] text-base">{label}</Text>
+          <View className={`px-2 py-1 rounded-md`} style={{ backgroundColor: confColor + '20' }}>
+            <Text style={{ color: confColor, fontSize: 10, fontWeight: 'bold' }}>{confText}</Text>
+          </View>
+        </View>
         <TextInput
-          className="text-right text-[#212121] text-lg font-bold w-1/3"
+          className="text-[#212121] text-lg font-bold w-full bg-[#F4F6F4] p-3 rounded-lg"
           value={value}
           onChangeText={onChange}
           keyboardType="numeric"
@@ -122,9 +134,9 @@ export default function Step4Screen({ navigation, route }) {
           <Text className="text-white font-bold text-center">{bannerText}</Text>
         </View>
 
-        <EditableRow label="HbA1c (%)" value={hba1c} onChange={setHba1c} />
-        <EditableRow label="Systolic Blood Pressure (mmHg)" value={bp} onChange={setBp} />
-        <EditableRow label="BMI" value={bmi} onChange={setBmi} />
+        <EditableRow label="HbA1c (%)" value={hba1c} onChange={setHba1c} extractedValue={assessmentDraft.hba1c} />
+        <EditableRow label="Systolic Blood Pressure (mmHg)" value={bp} onChange={setBp} extractedValue={assessmentDraft.bp_systolic} />
+        <EditableRow label="BMI" value={bmi} onChange={setBmi} extractedValue={assessmentDraft.bmi} />
 
         <View className="bg-[#E8F5E9] p-4 rounded-xl border border-[#A5D6A7] mt-6">
           <Text className="text-[#1B5E20] font-bold mb-2">🔒 Privacy Guarantee</Text>

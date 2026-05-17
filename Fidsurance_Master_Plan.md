@@ -10,13 +10,13 @@
 
 ---
 
-## The Two Key Differences From Every Other Team
+## The Three Key Differences From Every Other Team
 
 | Other teams | Fidsurance |
 |---|---|
 | Send PDF to cloud AI (ChatGPT / Gemini API) | Gemma runs **on your GPU via FastAPI** — raw document never leaves the user's network |
-| Score health risk, then filter plans by price | **3-stage ML pipeline**: XGBoost classifies risk → weighted scorer evaluates 5 factors → KNN cosine similarity blends in data-driven matching |
-| One recommendation screen | **Continuous agent chat** — user keeps asking questions, model re-ranks live |
+| Score health risk, then filter plans by price | **3-stage ML pipeline**: XGBoost classifies risk → weighted scorer evaluates 6 factors → KNN cosine similarity blends in data-driven matching |
+| One recommendation screen | **Master Orchestration Agent** — 6 tools wired to the full ML pipeline, operates the entire system through natural language |
 
 ---
 
@@ -208,6 +208,9 @@ Rules dominate (60%) to enforce hard constraints. Similarity adds data-driven nu
 | Stage 2 Scorer | Weighted 5-factor Python engine | ✅ Done |
 | Stage 3 Ranker | Cosine Similarity (10D vectors) | ✅ Done |
 | Plain English Explanations | Gemma 3 1B via /api/chat | ✅ Done |
+| Master Orchestration Agent | agent.py + /api/agent (6 tools) | ✅ Done |
+| Warning Flags per Plan | scorer.get_warning_flags() | ✅ Done |
+| Stress Test (7 scenarios) | stress_test.py + /api/stress-test | ✅ Done |
 | API Server | FastAPI + Uvicorn | ✅ Done |
 | LLM Runtime | HuggingFace Transformers (local GPU) | ✅ Done |
 | Database | Supabase (PostgreSQL) | ✅ Done |
@@ -253,27 +256,102 @@ Rules dominate (60%) to enforce hard constraints. Similarity adds data-driven nu
 | Side-by-side comparison (up to 3) | CompareScreen.js | ✅ |
 | Privacy controls | On-device extraction, vitals deleted after assess | ✅ |
 | Responsive UI (mobile + web) | Expo web support + NativeWind | ✅ |
-| Chatbot guiding users | Continuous agent chat on dashboard | ✅ |
-| 15–20 insurance plans | 15 plans across health, life, critical illness | ✅ |
+| Chatbot guiding users | Master Orchestration Agent — 6 tools, full pipeline access | ✅ |
+| 15–20 insurance plans | 20 plans including Family Floaters | ✅ |
+| Stress Test Simulator | 7 scenarios, room-rent penalty, verdict rating | ✅ |
+| Affordability Simulator | Budget slider + /api/agent budget_sim tool | ✅ |
+| Model confidence indicator | confidence_pct on risk card + warning_flags per plan | ✅ |
 
 ---
 
-## 4 USPs That Win
+## Master Orchestration Agent — Architecture
+
+```
+User message (natural language)
+        │
+        ▼
+  Intent Classifier  ←  6 regex rule sets, <1 ms, deterministic
+        │
+        ├── "reassess"    → _tool_reassess()      → full 3-stage ML re-run
+        ├── "budget_sim"  → _tool_budget_sim()    → scorer re-rank, skip XGBoost
+        ├── "stress_test" → _tool_stress_test()   → emergency cost simulation
+        ├── "compare"     → _tool_compare()       → 14-field comparison table
+        ├── "explain_risk"→ _tool_explain_risk()  → feature-importance narrative
+        ├── "plan_info"   → _tool_plan_info()     → full plan detail lookup
+        └── (no match)    → Gemma answers conversationally from session context
+        │
+        ▼
+  Gemma 3 1B  ←  session_ctx + tool_ctx + chat history
+        │
+        ▼
+  { response, tool_used, tool_result, updated_session }
+```
+
+**Session state** carried across every turn:
+```json
+{
+  "profile":       { "age": 35, "hba1c": 6.8, "monthly_budget": 1200, ... },
+  "risk_data":     { "risk_tier": "High", "confidence_pct": 74, ... },
+  "current_plans": [ { "id": 3, "name": "Star Health Diabetes Safe", ... } ]
+}
+```
+
+The `updated_session` the agent returns is fed back into the next call — so profile changes from "What if I also have kidney disease?" persist for the rest of the conversation.
+
+### Tool: `reassess`
+Triggers on: "what if I also have...", "add condition", "re-assess", "update my profile"
+- Parses new conditions (kidney, cancer, hypertension, etc.) and updates `chronic_count` / flags
+- Parses new budget if mentioned in the same message
+- Re-runs full XGBoost → scorer → cosine pipeline
+- Regenerates Gemma explanations for new top-5
+
+### Tool: `budget_sim`
+Triggers on: "what if my budget was ₹2000/month", "can I afford..."
+- Skips XGBoost (risk tier doesn't change with budget)
+- Re-runs Stage 2 + Stage 3 scorer only → faster re-rank
+- Returns `old_budget`, `new_budget`, new top-5
+
+### Tool: `stress_test`
+Triggers on: "cardiac event", "ICU", "cancer", "how much would it cost", "surgery"
+- 7 scenarios: ICU Stay, Cardiac, Knee Replacement, Appendix, Diabetic Emergency, Cancer (chemo), Stroke + Rehab
+- Calculates: room-rent penalty → coverage cap → co-payment → out-of-pocket
+- Returns `verdict`: Fully covered / Minimal / Manageable / Significant / High financial risk
+
+### Tool: `compare`
+Triggers on: "compare plan 3 and plan 9", "vs", "side by side"
+- Extracts plan IDs by number or by plan name substring match
+- Returns 14-field comparison table (premium, coverage, wait periods, Day 1 flags, CSR, network, etc.)
+
+### Tool: `explain_risk`
+Triggers on: "why am I High risk", "what drove my score", "explain my risk"
+- Returns top-4 feature importances from XGBoost with % contribution
+- Plain-English tier description + actionable advice
+
+### Tool: `plan_info`
+Triggers on: "tell me more about plan 2", "what are the exclusions for..."
+- Returns complete plan dict including coverage_highlights, exclusions, pros, cons, premium breakdown
+
+---
+
+## 5 USPs That Win
 
 ### USP 1 — Privacy-First Edge Architecture
 Raw lab report never hits the cloud. pdfjs-dist reads PDFs on-device. Only 10 numeric values sent to the server. Verifiable: open browser network monitor — no PDF bytes in transit.
 
 ### USP 2 — 3-Stage ML Pipeline (Classification + Scoring + Similarity)
-The only team that uses all three approaches the PS mentions. Each stage is visible in the API response with breakdown per factor.
+The only team that uses all three approaches the PS mentions. Each stage is visible in the API response with per-factor breakdowns.
 
-### USP 3 — Explainable AI (Feature Importance Bar Chart)
-The dashboard shows exactly which health factors drove the risk tier — colour-coded bars. Judge can see HbA1c contributed 13.3% to the prediction. No other team shows this.
+### USP 3 — Explainable AI (Feature Importance Bar Chart + Warning Flags)
+The dashboard shows exactly which health factors drove the risk tier — colour-coded bars. Every plan card now also shows up to 3 amber warning flags (e.g., "4-yr wait for diabetes cover", "20% co-payment on all claims").
 
-### USP 4 — Continuous Agent (Not One-Time Result)
-After seeing results, the user keeps chatting. "What if I also have kidney disease?" → model re-runs → new ranking appears live. This is the PS "Good to Have" chatbot — implemented and working.
+### USP 4 — Master Orchestration Agent (Not Just a Chat Box)
+After seeing results, the user keeps chatting. The agent has 6 tools and decides which one to use. "What if I also have kidney disease?" → re-runs the full 3-stage pipeline. "What if my budget was ₹800/month?" → re-ranks plans instantly. "Compare plan 3 and plan 9" → 14-field comparison table. This is the PS "Good to Have" chatbot — implemented as a proper tool-use agent.
 
-### BONUS USP 5 — Raspberry Pi Secure Hospital Kiosk
-A dedicated, air-gapped kiosk at the hospital. User logs in with their JWT, sees only their saved plan rankings. No raw vitals, no documents. Pitch: "You're in a hospital bed. You don't want the nurses' station PC. You use our kiosk."
+### USP 5 — Stress Test Simulator (7 Emergency Scenarios)
+Cardiac event, ICU stay, cancer chemotherapy, stroke rehabilitation, knee replacement, appendix surgery, diabetic emergency — each with realistic 2024 Indian hospital cost estimates, room-rent penalty calculation, and a plain-English verdict.
+
+### BONUS USP 6 — Raspberry Pi Secure Hospital Kiosk
+A dedicated, air-gapped kiosk at the hospital. User logs in with JWT, sees only their saved plan rankings. No raw vitals, no documents on the shared machine.
 
 ---
 

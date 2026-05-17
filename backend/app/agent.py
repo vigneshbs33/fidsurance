@@ -1,99 +1,593 @@
-import os
-import json
-import requests
-from .plans_db import INSURANCE_PLANS
-
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-# Defaulting to gemma:2b, but you can change this to gemma:7b or whatever tag you have pulled
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma:2b")
-
-def evaluate_with_agent(user_profile):
-    """
-    Uses local Gemma model via Ollama to evaluate user profile, determine risk,
-    and recommend insurance plans.
-    """
-    plans_context = json.dumps(INSURANCE_PLANS, indent=2)
-    user_context = json.dumps(user_profile, indent=2)
-    
-    prompt = f"""
-You are an expert insurance recommendation AI agent.
-USER PROFILE:
-{user_context}
-
-AVAILABLE INSURANCE PLANS:
-{plans_context}
-
-Task:
-1. Assess the user's health risk tier (LOW, MEDIUM, HIGH, CRITICAL) based on their age, bmi, hba1c, hypertension, and diabetes status.
-2. Calculate a risk_score from 0.0 to 1.0 (where 1.0 is extremely high risk).
-3. Select the top 5 most suitable plans from the available list that fit their health risks and budget.
-4. For each selected plan, provide a suitability_score (0.0 to 10.0) and a plain_english_explanation (1-2 sentences explaining exactly WHY this plan fits their specific health/financial profile, e.g., 'Recommended because your HbA1c levels indicate pre-diabetic risk — this plan covers diabetes-related hospitalization from day one.').
-
-You MUST respond with ONLY a valid JSON object. Do not use markdown blocks like ```json. Just output the raw JSON.
-Format:
-{{
-  "risk_score": 0.85,
-  "risk_tier": "HIGH",
-  "recommended_plans": [
-    {{
-      "id": plan_id_number,
-      "suitability_score": 9.5,
-      "plain_english_explanation": "explanation text"
-    }}
-  ]
-}}
 """
-    try:
-        print(f"Calling local Gemma Agent at {OLLAMA_URL} with model {OLLAMA_MODEL}...")
-        response = requests.post(OLLAMA_URL, json={
-            "model": OLLAMA_MODEL,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json"  # Instructs Ollama to strictly output JSON
-        }, timeout=120)
-        
-        response.raise_for_status()
-        data = response.json()
-        response_text = data.get("response", "{}")
-        
-        # Parse JSON from Agent
-        agent_result = json.loads(response_text)
-        
-        risk_score = agent_result.get("risk_score", 0.5)
-        risk_tier = agent_result.get("risk_tier", "MEDIUM")
-        recommended_items = agent_result.get("recommended_plans", [])
-        
-        # Merge Agent recommendations with full plan details from DB
-        top_plans = []
-        for item in recommended_items:
-            plan_id = item.get("id")
-            # find plan in db
-            full_plan = next((p for p in INSURANCE_PLANS if p["id"] == plan_id), None)
-            if full_plan:
-                merged = dict(full_plan)
-                merged["suitability_score"] = item.get("suitability_score", 0)
-                merged["plain_english_explanation"] = item.get("plain_english_explanation", "Recommended based on your profile.")
-                top_plans.append(merged)
-                
-        # Sort descending by score just to be sure
-        top_plans.sort(key=lambda x: x.get("suitability_score", 0), reverse=True)
-        
-        return {
-            "risk_score": risk_score,
+Fidsurance Master Orchestration Agent
+======================================
+A tool-use style AI agent that operates the full Fidsurance platform
+through natural language conversation.
+
+Architecture:
+  User message
+      │
+      ▼
+  Intent Classifier  (rule-based regex, deterministic, <1ms)
+      │
+      ▼
+  Tool Dispatcher    (selects & executes one of 6 tools)
+      │
+      ▼
+  Gemma 3 1B         (generates natural language from tool result + session ctx)
+      │
+      ▼
+  { response, tool_used, tool_result, updated_session }
+
+Tools:
+  reassess        → Re-run the full 3-stage ML pipeline (with profile updates)
+  budget_sim      → Re-rank plans with a new monthly budget
+  stress_test     → Emergency out-of-pocket cost simulator
+  compare         → Side-by-side plan comparison table
+  explain_risk    → Plain-English risk tier explanation
+  plan_info       → Detailed plan lookup
+"""
+
+import re
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from .plans_db import INSURANCE_PLANS
+from .stress_test import simulate
+
+
+# ─── Intent Classification ─────────────────────────────────────────────────
+#  Each entry: (intent_name, [regex_patterns], priority)
+#  Higher priority wins when multiple intents match.
+
+_INTENT_RULES: List[Tuple[str, List[str], int]] = [
+    ("reassess", [
+        r"re[-\s]?assess", r"re[-\s]?run", r"re[-\s]?calculat",
+        r"what if (i also|i had|my|i have|we add)",
+        r"add (kidney|cancer|heart|thyroid|lung|asthma|arthritis|liver|copd)",
+        r"include (my|a |the )",
+        r"also have", r"new condition", r"update (my )?profile",
+        r"change (my )?condition", r"now (i have|i am)",
+    ], 10),
+
+    ("budget_sim", [
+        r"budget.*(change|increas|decreas|rais|lower|drop|cut|reduc)",
+        r"(increas|decreas|change|rais|lower|what if|reduc).*budget",
+        r"if (i |my )budget (was|is|becomes|changes? to)",
+        r"afford", r"can i pay ₹",
+        r"₹\s?\d[\d,]*\s*(per |/\s*)?month",
+        r"\d+\s*(k|thousand|lakh)?\s*(per |/\s*)?month",
+        r"monthly (budget|premium|payment)",
+    ], 9),
+
+    ("stress_test", [
+        r"stress.?test",
+        r"cardiac|heart attack|angioplast",
+        r"\bicu\b", r"intensive care",
+        r"\bcancer\b", r"chemo",
+        r"\bstroke\b", r"cerebral",
+        r"knee|hip.*replac",
+        r"appendix|appendicit",
+        r"diabetic (emergency|crisis|dka)",
+        r"(how much|what).*(cost|pay|out.of.pocket|cover)",
+        r"(hospital|surgery|operation).*cost",
+        r"medical emergency", r"worst case",
+    ], 8),
+
+    ("compare", [
+        r"compar(e|ing|ison)",
+        r"\bvs\.?\b", r"\bversus\b",
+        r"difference between",
+        r"which (is |plan )better",
+        r"between plan\s?\d",
+        r"plan \d+.*(and|or|vs).*plan \d+",
+        r"side.?by.?side",
+    ], 7),
+
+    ("explain_risk", [
+        r"(explain|what (does|is|means?)|why am i).*(my )?risk",
+        r"why (high|medium|low|critical) risk",
+        r"risk (tier|score|level|rating|band)",
+        r"why (do i|am i) (have|at|show)",
+        r"hba1c.*affect", r"bmi.*affect", r"blood pressure.*affect",
+        r"what (makes|caused|drove) my risk",
+        r"understand.*(risk|score|tier)",
+    ], 6),
+
+    ("plan_info", [
+        r"tell me (more )?(about|on) (plan|this|the )",
+        r"(details?|info|information|more) (about|on|for|of) (plan|this)",
+        r"what (does|is|are) (plan\s?\d|this plan)",
+        r"explain plan\s?\d",
+        r"coverage (for|of|in) plan",
+        r"what (exclusions?|pros?|cons?) (does|in)",
+    ], 5),
+]
+
+
+def _classify_intent(message: str) -> Optional[str]:
+    """Return the highest-priority intent matching the user message, or None."""
+    msg = message.lower()
+    best_intent, best_priority = None, -1
+    for intent, patterns, priority in _INTENT_RULES:
+        for pat in patterns:
+            if re.search(pat, msg):
+                if priority > best_priority:
+                    best_intent, best_priority = intent, priority
+                break
+    return best_intent
+
+
+# ─── Entity Extraction ──────────────────────────────────────────────────────
+
+def _extract_budget(message: str) -> Optional[float]:
+    """Extract a rupee amount from text like '₹2000/month' or '1500 per month'."""
+    m = re.search(
+        r'(?:₹\s?)?(\d[\d,]*)(?:\s*(?:k|thousand|lakh|l))?'
+        r'(?:\s*(?:per|/)\s*(?:month|mo|m))',
+        message.lower()
+    )
+    if m:
+        num_str = m.group(0)
+        digits = re.search(r'(\d[\d,]*)', num_str)
+        if not digits:
+            return None
+        num = float(digits.group(1).replace(',', ''))
+        if re.search(r'(k|thousand)', num_str):
+            num *= 1000
+        elif re.search(r'(lakh|l)', num_str):
+            num *= 100000
+        return num
+
+    # Fallback: plain ₹N pattern
+    m2 = re.search(r'₹\s?(\d[\d,]+)', message)
+    if m2:
+        return float(m2.group(1).replace(',', ''))
+    return None
+
+
+def _extract_plan_ids(message: str, current_plans: List[Dict]) -> List[int]:
+    """Find plan IDs mentioned in the message — by number or by name."""
+    found = []
+    for m in re.finditer(r'plan\s?#?(\d+)', message.lower()):
+        pid = int(m.group(1))
+        if pid not in found:
+            found.append(pid)
+    for plan in (current_plans or []):
+        plan_name = plan.get('name', '').lower()
+        if plan_name and plan_name in message.lower():
+            if plan['id'] not in found:
+                found.append(plan['id'])
+    return found
+
+
+def _extract_scenario(message: str) -> Optional[str]:
+    """Map free-text to a SCENARIOS id."""
+    msg = message.lower()
+    mapping = [
+        (['cardiac', 'heart attack', 'angioplast', 'stent'],           'cardiac_event'),
+        (['icu', '5 day', 'five day', 'intensive care', 'icu stay'],   'icu_5_days'),
+        (['knee', 'hip', 'joint replace'],                              'knee_replacement'),
+        (['appendix', 'appendicit'],                                    'appendix_surgery'),
+        (['diabetic', 'dka', 'hypoglycem', 'ketoacid'],                'diabetic_emergency'),
+        (['cancer', 'chemo', 'oncolog', 'tumor'],                      'cancer_treatment'),
+        (['stroke', 'cerebral', 'neurolog', 'brain attack'],           'stroke_rehab'),
+    ]
+    for keywords, scenario_id in mapping:
+        if any(k in msg for k in keywords):
+            return scenario_id
+    return None
+
+
+def _extract_condition_updates(message: str, current_profile: Dict) -> Dict:
+    """
+    Parse new conditions / flags from the message and return a dict of
+    profile field updates to merge.
+    """
+    updates: Dict[str, Any] = {}
+    msg = message.lower()
+
+    condition_rules = [
+        (r'kidney|renal|nephro',                   {'chronic_count_delta': 1}),
+        (r'chronic heart|coronary|heart disease',  {'chronic_count_delta': 1}),
+        (r'thyroid|hypothyroid|hyperthyroid',       {'chronic_count_delta': 1}),
+        (r'arthritis|joint disease',                {'chronic_count_delta': 1}),
+        (r'liver|hepat|cirrhosis',                  {'chronic_count_delta': 1}),
+        (r'lung|copd|asthma|pulmonary',             {'chronic_count_delta': 1}),
+        (r'cancer|oncolog|tumour|tumor',            {'chronic_count_delta': 2}),
+        (r'diabetes|diabetic|type 2|type 1',        {'has_diabetes': True, 'diabetes': 1}),
+        (r'hypertension|high blood pressure|bp',    {'has_hypertension': True, 'hypertension': 1}),
+        (r'smok|cigarette',                         {'smoker': 1}),
+        (r'family (cover|plan|floater)',            {'coverage_for': 'Family'}),
+    ]
+
+    for pattern, field_updates in condition_rules:
+        if re.search(pattern, msg):
+            for k, v in field_updates.items():
+                if k == 'chronic_count_delta':
+                    current_count = current_profile.get('chronic_count', 0)
+                    updates['chronic_count'] = current_count + v
+                else:
+                    updates[k] = v
+
+    return updates
+
+
+# ─── Tools ─────────────────────────────────────────────────────────────────
+
+def _tool_reassess(
+    profile: Dict,
+    risk_assessee: Callable,
+    plan_ranker: Callable,
+    llm_generate: Callable,
+) -> Dict:
+    """Re-run the 3-stage ML pipeline and regenerate Gemma explanations."""
+    risk_tier, risk_score, feat_importance = risk_assessee(profile)
+
+    updated_profile = dict(profile)
+    updated_profile['risk_tier'] = risk_tier
+    updated_profile['risk_score'] = risk_score
+
+    top_plans = plan_ranker(INSURANCE_PLANS, updated_profile)
+
+    has_diabetes = bool(updated_profile.get('has_diabetes') or updated_profile.get('diabetes', 0))
+    has_hypert   = bool(updated_profile.get('has_hypertension') or updated_profile.get('hypertension', 0))
+    cond_str = ", ".join(filter(None, [
+        "diabetes" if has_diabetes else "",
+        "hypertension" if has_hypert else "",
+    ])) or "no major pre-existing conditions"
+
+    for plan in top_plans:
+        sys_p = (
+            "You are Fidsurance's AI health advisor. "
+            "Write a warm, specific 2-sentence explanation of why this insurance plan "
+            "fits this user's health and financial profile."
+        )
+        user_p = (
+            f"User: age={updated_profile.get('age')}, HbA1c={updated_profile.get('hba1c')}%, "
+            f"BP={updated_profile.get('bp_systolic')}, BMI={updated_profile.get('bmi')}, "
+            f"conditions: {cond_str}, budget=₹{updated_profile.get('monthly_budget')}/mo. "
+            f"Plan: {plan['name']} ({plan['type']}) — ₹{plan['annual_premium']}/yr, "
+            f"match score {plan['suitability_score']}/10. Why does this plan fit?"
+        )
+        try:
+            plan['plain_english_explanation'] = llm_generate(sys_p, user_p, max_tokens=80)
+        except Exception:
+            plan['plain_english_explanation'] = (
+                f"This {plan['type']} plan scored {plan['suitability_score']}/10 for your profile."
+            )
+
+    return {
+        "risk_assessment": {
             "risk_tier": risk_tier,
-            "top_plans": top_plans[:5]
-        }
-        
-    except Exception as e:
-        print(f"Agent failed or timed out: {e}")
-        # Fallback to XGBoost/heuristic scorer if agent fails (graceful degradation)
-        from .scorer import rank_plans
-        fallback_plans = rank_plans(INSURANCE_PLANS, user_profile)
-        for p in fallback_plans:
-            p["plain_english_explanation"] = "Recommended by our fallback algorithm because the AI agent was unreachable."
-            
-        return {
-            "risk_score": 0.5, # Default fallback
-            "risk_tier": "UNKNOWN",
-            "top_plans": fallback_plans
-        }
+            "risk_score": risk_score,
+            "confidence_pct": round(risk_score * 100),
+            "feature_importance_explanation": feat_importance,
+        },
+        "recommended_plans": top_plans,
+        "updated_profile": updated_profile,
+    }
+
+
+def _tool_budget_sim(
+    profile: Dict,
+    new_budget: float,
+    plan_ranker: Callable,
+) -> Dict:
+    """Re-rank plans with a new monthly budget without re-running XGBoost."""
+    updated = dict(profile)
+    old_budget = updated.get('monthly_budget', 1000)
+    updated['monthly_budget'] = new_budget
+    new_plans = plan_ranker(INSURANCE_PLANS, updated)
+    return {
+        "old_budget": old_budget,
+        "new_budget": new_budget,
+        "recommended_plans": new_plans,
+        "updated_profile": updated,
+    }
+
+
+def _tool_stress_test(plan_id: int, scenario_id: str, current_plans: List[Dict]) -> Dict:
+    """Simulate emergency out-of-pocket for a plan + scenario."""
+    plan = next((p for p in (current_plans or []) if p.get('id') == plan_id), None)
+    if not plan:
+        plan = next((p for p in INSURANCE_PLANS if p['id'] == plan_id), None)
+    if not plan:
+        return {"error": f"Plan ID {plan_id} not found"}
+
+    result = simulate(plan, scenario_id)
+    result['plan_id'] = plan_id
+    result['plan_name'] = plan.get('name', f'Plan {plan_id}')
+    result['insurer'] = plan.get('insurer', '')
+    return result
+
+
+def _tool_compare(plan_ids: List[int], current_plans: List[Dict]) -> Dict:
+    """Build side-by-side comparison data for up to 3 plans."""
+    plans_out = []
+    for pid in plan_ids[:3]:
+        p = next((x for x in (current_plans or []) if x.get('id') == pid), None)
+        if not p:
+            p = next((x for x in INSURANCE_PLANS if x['id'] == pid), None)
+        if p:
+            plans_out.append(p)
+
+    if len(plans_out) < 2:
+        return {"error": "Need at least 2 valid plan IDs to compare"}
+
+    FIELDS = [
+        ("Annual Premium",      lambda p: f"₹{p.get('annual_premium', 0):,}"),
+        ("Coverage",            lambda p: f"₹{p.get('coverage', 0) // 100000}L"),
+        ("Plan Type",           lambda p: p.get('type', '-')),
+        ("Pre-existing Wait",   lambda p: f"{p.get('pre_existing_wait_years', 4)} yr"),
+        ("Diabetes Day 1",      lambda p: "Yes ✓" if p.get('diabetes_day1') else "No"),
+        ("Hypertension Day 1",  lambda p: "Yes ✓" if p.get('hypertension_day1') else "No"),
+        ("Co-payment",          lambda p: f"{p.get('copayment_pct', 0)}%"),
+        ("Room Rent Limit",     lambda p: p.get('room_rent_limit', '-')),
+        ("No-claim Bonus",      lambda p: f"{p.get('no_claim_bonus_pct', 0)}%"),
+        ("Claim Settlement",    lambda p: f"{p.get('claim_settlement_ratio', '-')}%"),
+        ("Hospital Network",    lambda p: f"{p.get('hospital_network_count', 0):,}"),
+        ("Restoration Benefit", lambda p: "Yes" if p.get('restoration_benefit') else "No"),
+        ("Family Floater",      lambda p: "Yes" if p.get('is_family_floater') else "No"),
+        ("Match Score",         lambda p: f"{p.get('suitability_score', 'N/A')}/10"),
+    ]
+
+    table = {label: {p['name']: fn(p) for p in plans_out} for label, fn in FIELDS}
+
+    return {
+        "plans": [{"id": p['id'], "name": p['name'], "insurer": p.get('insurer', '')} for p in plans_out],
+        "comparison_table": table,
+    }
+
+
+def _tool_explain_risk(risk_data: Dict) -> Dict:
+    """Return structured plain-English risk explanation."""
+    tier = risk_data.get('risk_tier', 'Unknown')
+    score = risk_data.get('risk_score', 0.5)
+    importance = risk_data.get('feature_importance_explanation', {})
+
+    descriptions = {
+        'Low':      ('Your health indicators are within normal ranges. '
+                     'You are at low risk of requiring major medical care in the near term. '
+                     'A basic or standard plan is appropriate.'),
+        'Medium':   ('One or two elevated health markers are present. '
+                     'You should consider a standard or comprehensive plan that covers your '
+                     'specific conditions with a reasonable waiting period.'),
+        'High':     ('Multiple risk factors are active. You have a significantly higher chance '
+                     'of requiring medical care. A comprehensive plan — ideally with Day 1 '
+                     'cover for pre-existing conditions — is strongly recommended.'),
+        'Critical': ('Your profile shows multiple serious risk factors. '
+                     'Immediate comprehensive coverage is essential. '
+                     'Look for plans with Day 1 condition cover and no or short waiting periods.'),
+    }
+
+    top_drivers = sorted(importance.items(), key=lambda x: x[1], reverse=True)[:4]
+    driver_text = "; ".join([f"{k} ({v*100:.0f}% contribution)" for k, v in top_drivers])
+
+    return {
+        "tier": tier,
+        "score": score,
+        "description": descriptions.get(tier, ""),
+        "top_drivers": top_drivers,
+        "driver_summary": driver_text,
+        "full_advice": (
+            f"Your risk tier is {tier}. "
+            f"The main factors driving this are: {driver_text}. "
+            f"{descriptions.get(tier, '')}"
+        ),
+    }
+
+
+def _tool_plan_info(plan_id: int, current_plans: List[Dict]) -> Dict:
+    """Return complete plan details."""
+    plan = next((p for p in (current_plans or []) if p.get('id') == plan_id), None)
+    if not plan:
+        plan = next((p for p in INSURANCE_PLANS if p['id'] == plan_id), None)
+    if not plan:
+        return {"error": f"Plan {plan_id} not found"}
+    return {"plan": plan}
+
+
+# ─── Context Builders ───────────────────────────────────────────────────────
+
+def _build_session_context(profile: Dict, risk_data: Dict, current_plans: List[Dict]) -> str:
+    parts = []
+    if profile:
+        parts.append(
+            f"Profile: age={profile.get('age')}, BMI={profile.get('bmi')}, "
+            f"HbA1c={profile.get('hba1c')}%, BP={profile.get('bp_systolic')}, "
+            f"diabetes={'yes' if (profile.get('has_diabetes') or profile.get('diabetes')) else 'no'}, "
+            f"budget=₹{profile.get('monthly_budget')}/mo"
+        )
+    if risk_data:
+        parts.append(f"Risk tier: {risk_data.get('risk_tier', 'Unknown')} "
+                     f"({risk_data.get('confidence_pct', 0)}% confidence)")
+    if current_plans:
+        plan_names = [p['name'] for p in current_plans[:3]]
+        parts.append(f"Top plans: {', '.join(plan_names)}")
+    return ". ".join(parts) + "." if parts else ""
+
+
+def _build_tool_context(tool_used: Optional[str], tool_result: Optional[Dict]) -> str:
+    if not tool_result or "error" in tool_result:
+        return ""
+
+    if tool_used == "reassess":
+        ra = tool_result.get('risk_assessment', {})
+        top5 = tool_result.get('recommended_plans', [])
+        plan_summary = "; ".join(
+            f"{p['name']} ({p['suitability_score']}/10)" for p in top5[:3]
+        )
+        return (f"Re-assessment complete. New risk tier: {ra.get('risk_tier')} "
+                f"({ra.get('confidence_pct')}% confidence). Top plans: {plan_summary}.")
+
+    if tool_used == "budget_sim":
+        top5 = tool_result.get('recommended_plans', [])
+        plan_summary = "; ".join(
+            f"{p['name']} ₹{p.get('annual_premium', 0):,}/yr" for p in top5[:3]
+        )
+        return (f"Budget changed ₹{tool_result.get('old_budget', '?')} → "
+                f"₹{tool_result.get('new_budget', '?')}/month. "
+                f"Updated top plans: {plan_summary}.")
+
+    if tool_used == "stress_test":
+        return (f"Stress test — {tool_result.get('scenario_name')} on "
+                f"{tool_result.get('plan_name')}: "
+                f"Total cost ₹{tool_result.get('total_cost', 0):,}, "
+                f"plan covers ₹{tool_result.get('plan_covers', 0):,}, "
+                f"out-of-pocket ₹{tool_result.get('out_of_pocket', 0):,}. "
+                f"Verdict: {tool_result.get('verdict', '')}.")
+
+    if tool_used == "compare":
+        names = " vs ".join(p['name'] for p in tool_result.get('plans', []))
+        return f"Comparison table ready for: {names}."
+
+    if tool_used == "explain_risk":
+        return f"Risk explanation: {tool_result.get('full_advice', '')}."
+
+    if tool_used == "plan_info":
+        p = tool_result.get('plan', {})
+        return (f"Plan: {p.get('name')} by {p.get('insurer')}, "
+                f"₹{p.get('annual_premium', 0):,}/yr, "
+                f"₹{p.get('coverage', 0) // 100000}L coverage, "
+                f"type: {p.get('type')}.")
+
+    return ""
+
+
+# ─── Master Entry Point ─────────────────────────────────────────────────────
+
+def run_agent(
+    messages: List[Dict],
+    session: Dict,
+    risk_assessee: Callable,
+    plan_ranker: Callable,
+    llm_generate: Callable,
+) -> Dict:
+    """
+    Master orchestration agent.
+
+    Parameters
+    ----------
+    messages      Full conversation history [{role, content}, ...]
+    session       Current session state:
+                    { profile: dict, risk_data: dict, current_plans: list }
+    risk_assessee Callable(profile_dict) → (risk_tier, risk_score, explanation)
+    plan_ranker   Callable(plans, user_dict) → sorted plan list
+    llm_generate  Callable(sys_prompt, user_prompt, max_tokens) → str
+
+    Returns
+    -------
+    {
+      response:         str   — natural language reply
+      tool_used:        str   — which tool fired (or None)
+      tool_result:      dict  — structured tool output (or None)
+      updated_session:  dict  — session with any in-place updates
+    }
+    """
+    latest = (messages[-1].get('content') or "").strip() if messages else ""
+    profile = dict(session.get('profile') or {})
+    risk_data = dict(session.get('risk_data') or {})
+    current_plans: List[Dict] = list(session.get('current_plans') or [])
+    updated_session = dict(session)
+
+    intent = _classify_intent(latest)
+    tool_used: Optional[str] = None
+    tool_result: Optional[Dict] = None
+
+    # ── TOOL DISPATCH ───────────────────────────────────────────────────────
+
+    if intent == "reassess" and profile:
+        condition_updates = _extract_condition_updates(latest, profile)
+        if condition_updates:
+            profile.update(condition_updates)
+
+        budget_update = _extract_budget(latest)
+        if budget_update:
+            profile['monthly_budget'] = budget_update
+
+        tool_result = _tool_reassess(profile, risk_assessee, plan_ranker, llm_generate)
+        tool_used = "reassess"
+        updated_session['profile']       = tool_result.get('updated_profile', profile)
+        updated_session['risk_data']     = tool_result.get('risk_assessment', {})
+        updated_session['current_plans'] = tool_result.get('recommended_plans', [])
+
+    elif intent == "budget_sim" and profile:
+        new_budget = _extract_budget(latest)
+        if new_budget:
+            tool_result = _tool_budget_sim(profile, new_budget, plan_ranker)
+            tool_used = "budget_sim"
+            updated_session['profile']       = tool_result.get('updated_profile', profile)
+            updated_session['current_plans'] = tool_result.get('recommended_plans', [])
+
+    elif intent == "stress_test":
+        plan_ids = _extract_plan_ids(latest, current_plans)
+        plan_id = plan_ids[0] if plan_ids else (current_plans[0]['id'] if current_plans else 1)
+        scenario_id = _extract_scenario(latest) or 'cardiac_event'
+        tool_result = _tool_stress_test(plan_id, scenario_id, current_plans)
+        tool_used = "stress_test"
+
+    elif intent == "compare":
+        plan_ids = _extract_plan_ids(latest, current_plans)
+        if len(plan_ids) < 2 and len(current_plans) >= 2:
+            plan_ids = [p['id'] for p in current_plans[:2]]
+        if len(plan_ids) >= 2:
+            tool_result = _tool_compare(plan_ids[:3], current_plans)
+            tool_used = "compare"
+
+    elif intent == "explain_risk" and risk_data:
+        tool_result = _tool_explain_risk(risk_data)
+        tool_used = "explain_risk"
+
+    elif intent == "plan_info":
+        plan_ids = _extract_plan_ids(latest, current_plans)
+        plan_id = plan_ids[0] if plan_ids else (current_plans[0]['id'] if current_plans else None)
+        if plan_id:
+            tool_result = _tool_plan_info(plan_id, current_plans)
+            tool_used = "plan_info"
+
+    # ── RESPONSE GENERATION via Gemma ───────────────────────────────────────
+
+    session_ctx  = _build_session_context(profile, risk_data, current_plans)
+    tool_ctx     = _build_tool_context(tool_used, tool_result)
+
+    # Build a short conversation history for context (last 4 turns)
+    history_lines = []
+    for msg in messages[-5:-1]:  # exclude the current message
+        role = "User" if msg.get('role') == 'user' else "Advisor"
+        history_lines.append(f"{role}: {msg.get('content', '')}")
+    history = "\n".join(history_lines)
+
+    sys_prompt = (
+        "You are Fidsurance's AI insurance advisor. You have access to the user's health profile, "
+        "risk assessment, and recommended insurance plans. "
+        "Respond in 2-3 sentences. Be warm, specific, and jargon-free. "
+        "When a tool result is available, summarise it clearly for the user. "
+        "Never make up plan details — only reference what is in the context."
+    )
+
+    user_prompt = (
+        f"{session_ctx}\n"
+        f"{'Tool executed — ' + tool_ctx if tool_ctx else ''}\n"
+        f"Conversation so far:\n{history}\n"
+        f"User: {latest}\nAdvisor:"
+    )
+
+    try:
+        response = llm_generate(sys_prompt, user_prompt, max_tokens=150)
+    except Exception:
+        # Graceful fallback: use tool context if available
+        if tool_ctx:
+            response = tool_ctx
+        else:
+            response = (
+                "I'm your Fidsurance advisor. You can ask me to re-assess your profile with "
+                "a new condition, simulate a different budget, run a stress test, or compare plans."
+            )
+
+    return {
+        "response": response,
+        "tool_used": tool_used,
+        "tool_result": tool_result if (tool_result and "error" not in tool_result) else None,
+        "tool_error": tool_result.get("error") if (tool_result and "error" in tool_result) else None,
+        "updated_session": updated_session,
+    }

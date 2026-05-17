@@ -5,9 +5,6 @@ which feeds into Stage 3 (cosine similarity ranker) for the final combined score
 """
 
 import math
-import joblib
-import numpy as np
-from pathlib import Path
 
 # ─── Stage 3 helpers ─────────────────────────────────────────────────────────
 MAX_VALUES = [100.0, 50.0, 5000000.0, 10000.0, 1.0, 14.0, 220.0, 1.0, 1.0, 5.0]
@@ -100,13 +97,29 @@ def suitability_score(plan, user):
     elif ratio_cov >= 1.0: scores['coverage_adequacy'] = 5.0
     else:                  scores['coverage_adequacy'] = 2.5
 
+    # ── FAMILY FIT (15%) ──
+    coverage_for = user.get('coverage_for', 'Individual')
+    is_plan_floater = plan.get('is_family_floater', False)
+    if coverage_for == 'Family':
+        if is_plan_floater:
+            scores['family_fit'] = 10.0
+        else:
+            scores['family_fit'] = 0.0
+    else:
+        # Individual seeking plan
+        if not is_plan_floater:
+            scores['family_fit'] = 10.0
+        else:
+            scores['family_fit'] = 3.0 # Can buy family floater but not ideal
+
     # ── WEIGHTED SUM ──
     weights = {
-        'budget_fit': 0.25,
-        'condition_match': 0.35,
-        'risk_alignment': 0.20,
+        'budget_fit': 0.20,
+        'condition_match': 0.30,
+        'risk_alignment': 0.15,
         'age_eligibility': 0.10,
         'coverage_adequacy': 0.10,
+        'family_fit': 0.15,
     }
     final = sum(scores[k] * weights[k] for k in weights)
     return round(min(10.0, max(0.0, final)), 1), scores
@@ -138,30 +151,69 @@ def cosine_match_score(plan, user):
     return round(sim * 10, 1)
 
 
+# ─── Warning Flags ────────────────────────────────────────────────────────────
+def get_warning_flags(plan: dict, user: dict) -> list:
+    """
+    Return up to 3 human-readable amber warning strings for a plan given a
+    user profile. Surfaced as badge-style alerts on plan cards.
+    """
+    warnings = []
+    has_diabetes = user.get('has_diabetes') or user.get('diabetes', 0) == 1
+    has_hypert   = user.get('has_hypertension') or user.get('hypertension', 0) == 1
+    wait         = plan.get('pre_existing_wait_years', 4)
+
+    if has_diabetes and not plan.get('diabetes_day1') and wait >= 3:
+        warnings.append(f"{wait}-yr wait for diabetes cover")
+
+    if has_hypert and not plan.get('hypertension_day1') and wait >= 3:
+        warnings.append(f"{wait}-yr wait for hypertension cover")
+
+    copay = plan.get('copayment_pct', 0)
+    if copay >= 20:
+        warnings.append(f"{copay}% co-payment on all claims")
+    elif copay > 0 and user.get('risk_tier') in ('High', 'Critical'):
+        warnings.append(f"{copay}% co-payment — costly at high risk")
+
+    income = user.get('income_lakh', 5) * 100_000
+    if plan.get('coverage', 0) < income:
+        warnings.append("Coverage below 1× annual income")
+
+    if plan.get('hospital_network_count', 9999) < 6000:
+        warnings.append("Smaller hospital network")
+
+    csr = plan.get('claim_settlement_ratio', 100)
+    if csr < 90:
+        warnings.append(f"Claim settlement ratio only {csr}%")
+
+    if user.get('smoker') and plan.get('type') == 'Basic':
+        warnings.append("Smoking loading likely applies")
+
+    return warnings[:3]
+
+
 # ─── Combined 3-Stage Ranker ──────────────────────────────────────────────────
-def rank_plans(plans, user):
+def rank_plans(plans: list, user: dict) -> list:
     """
     Main entry point.
     Returns top 5 plans sorted by combined_score (60% suitability + 40% similarity).
-    Each plan includes suitability_breakdown and match_score.
+    Each plan dict includes suitability_score, suitability_breakdown, and warning_flags.
     """
     results = []
     for plan in plans:
         suit, breakdown = suitability_score(plan, user)
         if suit == 0.0:
-            continue   # ineligible — skip
+            continue   # age-ineligible — skip
 
-        sim = cosine_match_score(plan, user)
-
-        # Blend: rules dominate but similarity adds data-driven nuance
+        sim      = cosine_match_score(plan, user)
         combined = round(0.60 * suit + 0.40 * sim, 1)
 
         enriched = dict(plan)
-        enriched['suitability_score'] = combined     # the headline number (0-10)
+        enriched['suitability_score'] = combined
         enriched['suitability_breakdown'] = {
             **{k: round(v, 1) for k, v in breakdown.items()},
             'cosine_similarity': sim,
         }
+        enriched['warning_flags'] = get_warning_flags(plan, user)
         results.append(enriched)
 
     results.sort(key=lambda p: p['suitability_score'], reverse=True)

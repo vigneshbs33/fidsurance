@@ -330,6 +330,7 @@ Metrics to show judges:
   "risk_assessment": {
     "risk_tier": "High",
     "risk_score": 0.74,
+    "confidence_pct": 87.5,
     "feature_importance_explanation": {
       "HbA1c (6.8%)": 0.31,
       "BMI (29.5)": 0.18,
@@ -355,16 +356,49 @@ Metrics to show judges:
 
 ---
 
-## Files To Create
+## The ML Pipeline as an Agent Tool
 
-| File | Purpose |
+The Master Orchestration Agent (`agent.py`) uses the ML pipeline as a callable tool — not just once at assessment time, but on every "what if" question the user asks.
+
+When the agent detects a `reassess` intent (e.g. "What if I also have kidney disease?"):
+1. It parses the new condition from the message and updates `chronic_count` / condition flags
+2. It calls `_assess_risk_dict(profile)` → XGBoost Stage 1 runs again with the updated profile
+3. It passes the new `risk_tier` into `rank_plans()` → Stage 2 + Stage 3 re-run
+4. Gemma regenerates plain-English explanations for the new top-5
+5. The full result is returned as `tool_result` and the `updated_session` carries the new profile forward
+
+When the agent detects a `budget_sim` intent (e.g. "What if my budget was ₹800/month?"):
+- XGBoost is **not re-run** — the risk tier doesn't change with budget
+- Only Stage 2 + Stage 3 re-run with the new `monthly_budget` value
+- This is ~10× faster than a full reassessment
+
+**Why this matters for judges:** The PS asks for a chatbot that helps users. Ours doesn't just answer questions — it re-runs the trained model live in response to natural language, giving users an AI advisor that actually updates its recommendations rather than just generating text.
+
+## Warning Flags (Post-Scoring Enhancement)
+
+`scorer.get_warning_flags(plan, user)` runs after Stage 3 and appends up to 3 amber warnings per plan:
+
+| Condition | Flag shown |
 |---|---|
-| `backend/ml/generate_dataset.py` | Synthetic + real data merger |
-| `backend/ml/train_model.py` | XGBoost training pipeline |
-| `backend/ml/evaluate_model.py` | F1, confusion matrix, SHAP |
-| `backend/ml/risk_model.json` | Trained XGBoost weights |
-| `backend/ml/label_encoder.pkl` | LabelEncoder for risk tiers |
-| `backend/ml/shap_explainer.pkl` | SHAP TreeExplainer |
-| `backend/ml/training_data.csv` | Combined dataset |
-| `backend/app/scorer.py` | 3-stage pipeline (stages 2+3) |
-| `backend/app/main.py` | Wires all 3 stages together |
+| Diabetic user, no Day 1 cover, 3+ yr wait | "3-yr wait for diabetes cover" |
+| Co-payment ≥ 20% | "20% co-payment on all claims" |
+| Coverage < 1× annual income | "Coverage below 1× annual income" |
+| Hospital network < 6,000 | "Smaller hospital network" |
+| Claim settlement ratio < 90% | "Claim settlement ratio only X%" |
+| Smoker on Basic plan | "Smoking loading likely applies" |
+
+These appear in every `/api/assess` and `/api/agent` response as `warning_flags: [...]` on each plan.
+
+## Files Summary
+
+| File | Purpose | Status |
+|---|---|---|
+| `backend/ml/generate_dataset.py` | Synthetic + real data merger | ✅ Done |
+| `backend/ml/train_model.py` | XGBoost training pipeline | ✅ Done |
+| `backend/ml/risk_model.json` | Trained XGBoost weights | ✅ Done |
+| `backend/ml/label_encoder.pkl` | LabelEncoder for risk tiers | ✅ Done |
+| `backend/ml/training_data.csv` | 100k-row combined dataset | ✅ Done |
+| `backend/app/scorer.py` | 3-stage pipeline + warning flags | ✅ Done |
+| `backend/app/agent.py` | Master Orchestration Agent (6 tools) | ✅ Done |
+| `backend/app/main.py` | FastAPI — all endpoints inc. /api/agent | ✅ Done |
+| `backend/app/stress_test.py` | 7 emergency scenarios | ✅ Done |
