@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(New-Item -ItemType Directory -Force -Path graphify-out)",
+      "Bash(not exist *)",
+      "Read(//d/vignesh/files/Personal/Hackthon/Fidility/Fidsurance/graphify-out/**)",
+      "Bash(python -c ' *)",
+      "Bash(ls -la .graphify*)",
+      "Bash(ls graphify-out/)"
+    ]
+  }
+}

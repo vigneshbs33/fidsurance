@@ -35,7 +35,7 @@ export default function Step4Screen({ navigation, route }) {
           await saveAssessmentResult(
             user.id,
             finalData,
-            result.risk_assessment,
+            null, // No risk_assessment anymore
             result.recommended_plans,
           );
         } catch (dbErr) {
@@ -50,11 +50,10 @@ export default function Step4Screen({ navigation, route }) {
       // Fallback mock result if backend is down
       console.log('Backend failed, using mock result:', err.message);
       const mockResult = {
-        risk_assessment: { risk_score: 0.63, risk_tier: 'MEDIUM' },
         recommended_plans: [
           {
             id: 'star_diabetes', name: 'Star Health Diabetes Safe', insurer: 'Star Health',
-            coverage: 500000, annual_premium: 14000, suitability_score: 8.4,
+            coverage: 500000, annual_premium: 14000, suitability_score: 9.4,
             type: 'Comprehensive', pre_existing_wait_years: 0, diabetes_day1: true,
           },
           {
@@ -131,7 +130,7 @@ export default function Step4Screen({ navigation, route }) {
           <Text className="text-[#1B5E20] font-bold mb-2">🔒 Privacy Guarantee</Text>
           <Text className="text-[#212121] leading-5">
             Your lab document is read entirely on this device. Only the numbers above will be sent to our
-            risk model. Your document and name are never transmitted.
+            matching model. Your document and name are never transmitted.
           </Text>
         </View>
       </ScrollView>

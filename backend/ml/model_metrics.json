@@ -1,0 +1,30 @@
+{
+  "accuracy": 0.9945,
+  "weighted_f1": 0.9945,
+  "per_class_f1": {
+    "Critical": 0.9938,
+    "High": 0.9908,
+    "Low": 0.9976,
+    "Medium": 0.9943
+  },
+  "feature_importances": {
+    "has_diabetes": 0.3214,
+    "chronic_count": 0.3099,
+    "hba1c": 0.1325,
+    "bp_systolic": 0.0563,
+    "smoker": 0.0451,
+    "metabolic_risk_score": 0.0371,
+    "age": 0.0328,
+    "has_hypertension": 0.0288,
+    "bmi_age_interaction": 0.0202,
+    "bmi": 0.0159
+  },
+  "cv_f1_scores": [
+    0.992246201936409,
+    0.9934971510779842,
+    0.9937489514250331,
+    0.9940001873964248,
+    0.9930005036210623
+  ],
+  "cv_f1_mean": 0.9933
+}

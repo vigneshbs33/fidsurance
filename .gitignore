@@ -1,2 +1,30 @@
-/node_modules/*
-/backend/venv/*
+# Dependencies
+/node_modules/
+/backend/venv/
+/frontend/node_modules/
+
+# Environment secrets
+*.env
+.env
+frontend/.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Large ML training files (regenerate with: python -m ml.generate_dataset)
+backend/ml/training_data.csv
+backend/ml/synthetic_health_data.csv
+
+# Raw dataset downloads (user downloads these from Kaggle/UCI)
+backend/ml/raw/
+
+# Legacy root-level artifacts
+fidsurance_dataset.csv
+fidsurance_model.json
+fidsurance_model_meta.json
+
+# IDE
+.vscode/
+.idea/

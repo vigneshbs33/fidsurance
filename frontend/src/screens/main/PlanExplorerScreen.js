@@ -16,6 +16,19 @@ export default function PlanExplorerScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
   const [activeType, setActiveType] = useState('All');
+  const [compareSelection, setCompareSelection] = useState([]);
+
+  function toggleCompare(plan) {
+    if (compareSelection.find(p => p.id === plan.id)) {
+      setCompareSelection(compareSelection.filter(p => p.id !== plan.id));
+    } else {
+      if (compareSelection.length < 3) {
+        setCompareSelection([...compareSelection, plan]);
+      } else {
+        alert("You can only compare up to 3 plans at once.");
+      }
+    }
+  }
 
   const loadPlans = useCallback(async () => {
     try {
@@ -111,8 +124,18 @@ export default function PlanExplorerScreen({ navigation }) {
                   <Text className="text-[#757575] text-xs font-bold uppercase mb-1">{plan.insurer}</Text>
                   <Text className="text-[#212121] font-bold text-lg leading-5">{plan.name}</Text>
                 </View>
-                <View className="bg-[#E8F5E9] px-3 py-1 rounded-full">
-                  <Text className="text-[#1B5E20] font-bold text-xs capitalize">{plan.type}</Text>
+                <View className="flex-row items-center">
+                  <TouchableOpacity 
+                    className={`mr-2 px-3 py-1 rounded-full border ${compareSelection.find(p => p.id === plan.id) ? 'bg-[#1B5E20] border-[#1B5E20]' : 'bg-white border-[#E0E0E0]'}`}
+                    onPress={() => toggleCompare(plan)}
+                  >
+                    <Text className={`text-xs font-bold ${compareSelection.find(p => p.id === plan.id) ? 'text-white' : 'text-[#757575]'}`}>
+                      {compareSelection.find(p => p.id === plan.id) ? '✓ Added' : '+ Compare'}
+                    </Text>
+                  </TouchableOpacity>
+                  <View className="bg-[#E8F5E9] px-3 py-1 rounded-full">
+                    <Text className="text-[#1B5E20] font-bold text-xs capitalize">{plan.type}</Text>
+                  </View>
                 </View>
               </View>
 
@@ -139,8 +162,20 @@ export default function PlanExplorerScreen({ navigation }) {
             </TouchableOpacity>
           ))
         )}
-        <View className="h-10" />
+        <View className="h-20" />
       </ScrollView>
+
+      {compareSelection.length > 0 && (
+        <View className="absolute bottom-6 left-6 right-6">
+          <TouchableOpacity 
+            className="bg-[#1B5E20] py-4 rounded-2xl items-center shadow-lg flex-row justify-center"
+            onPress={() => navigation.navigate('Compare', { selectedPlans: compareSelection })}
+          >
+            <Text className="text-white font-bold text-lg mr-2">Compare {compareSelection.length} Plan{compareSelection.length > 1 ? 's' : ''}</Text>
+            <Text className="text-white text-lg">→</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </SafeAreaView>
   );
 }

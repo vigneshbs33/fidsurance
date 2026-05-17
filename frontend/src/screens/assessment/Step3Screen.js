@@ -1,25 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 
 // Mock text extraction for Hackathon prototype (can be replaced with real pdf.js logic if needed)
 async function mockExtractPDFText() {
   return new Promise(resolve => {
     setTimeout(() => {
-      resolve("LAB REPORT: Patient shows HbA1c of 6.2%, BP is 128/84. BMI calculated at 26.5. Noted family history of diabetes.");
+      resolve("LAB REPORT: Patient shows HbA1c of 6.2%, BP is 128/84. BMI calculated at 26.5.");
     }, 2000);
   });
-}
-
-function computeConfidence(text) {
-  let score = 0;
-  if (/hba1c/i.test(text)) score += 25;
-  if (/blood pressure|bp/i.test(text)) score += 25;
-  if (/bmi/i.test(text)) score += 25;
-  if (/glucose/i.test(text)) score += 15;
-  if (/lab|report|diagnostic/i.test(text)) score += 10;
-  return Math.min(score, 100);
 }
 
 export default function Step3Screen({ navigation, route }) {
@@ -31,34 +22,24 @@ export default function Step3Screen({ navigation, route }) {
   const [extractedData, setExtractedData] = useState({});
   const scrollViewRef = useRef();
 
-  const systemPrompt = `
-You are Fidsurance's health assessment agent. Your job is to help users fill in their health profile by reading their lab report and asking friendly follow-up questions.
-
-Rules:
-- Be conversational, warm, and concise. Use simple language.
-- When you get extracted text from a lab report, identify: HbA1c, Blood Pressure (systolic), BMI, Fasting Glucose, Diabetes diagnosis, Hypertension diagnosis, Pre-diabetic status, Family history of diabetes.
-- For each value you find, confirm it clearly with the ✅ emoji and the number.
-- For each value you CANNOT find, ask for it in a friendly way. Example: "I couldn't find your HbA1c — do you know it from a recent blood test?"
-- If the user says "skip", "don't know", or "continue", accept it and use a note like "(will use average)" — NEVER block progress.
-- Once you have HbA1c, Systolic BP, and BMI (or user has skipped them), send a confirmation summary and tell the user to press Confirm.
-- Do NOT give medical advice. Do NOT diagnose. Only confirm what the report says.
-- Keep each response under 120 words.
-- Use bullet points with ✅ for found values and ❓ for missing ones.
-`;
-
   useEffect(() => {
-    // Initial Gemma message
     setTimeout(() => {
       setMessages([{
         id: 1,
         sender: 'ai',
-        text: "Hello! I'm your Fidsurance health agent. I'll help read your lab report and fill in your health profile automatically.\n\nYou can:\n• Attach a PDF or photo of your lab report using the 📎 button\n• Or just type your values directly if you have them handy\n\nEither way, I'll ask about anything that's missing. Shall we start?"
+        text: "Hello! I'm your Fidsurance health agent. I'll help read your lab report and fill in your health profile automatically.\n\nYou can:\n• Upload a PDF or Photo of your lab report using the 📎 button\n• Or just type your values directly\n\nEither way, I'll ask about anything that's missing. Shall we start?"
       }]);
     }, 1000);
   }, []);
 
   async function agentReply(promptText, isFile, currentExtracted) {
     await new Promise(r => setTimeout(r, 1200));
+
+    // If Gemma sent back a conversational reply instead of JSON (because data was missing)
+    if (currentExtracted && currentExtracted.raw_reply) {
+      setReadyToConfirm(true); // Always let them proceed manually if they want
+      return currentExtracted.raw_reply + "\n\n(Type any missing values above, or press Confirm to use safe defaults.)";
+    }
 
     if (isFile) {
       const found = [];
@@ -73,19 +54,11 @@ Rules:
       if (currentExtracted.bmi)         found.push(`✅ BMI: ${currentExtracted.bmi}`);
       else                              missing.push('❓ BMI — check a recent report or use a BMI calculator');
 
-      const confidence = currentExtracted.confidence || 0;
-      const confText = confidence >= 80
-        ? "I'm confident in these readings."
-        : confidence >= 50
-        ? "Some values were unclear — please verify."
-        : "This document was hard to parse — please type values directly if needed.";
-
       const lines = [
         `Got it! Here's what I found in your report:\n`,
         ...found,
         missing.length > 0 ? `\nI couldn't find:\n` : '',
         ...missing,
-        `\n${confText}`,
         missing.length === 0
           ? "\nAll key values captured! Press **Confirm & Review Data** when ready."
           : "\nType any missing values above, or press **Confirm** to use safe defaults.",
@@ -100,41 +73,39 @@ Rules:
     const skipWords = ['skip', 'continue', "don't know", 'idk', 'na', 'n/a', 'no idea'];
     if (skipWords.some(k => lower.includes(k))) {
       setReadyToConfirm(true);
-      return "No problem! I'll use standard averages for any missing values.\n\nPress **Confirm & Review Data** — you can edit everything on the next screen before it's sent to the risk model.";
-    }
-
-    // They likely typed a number
-    if (/\d/.test(promptText)) {
-      setReadyToConfirm(true);
-      return `Noted! Press **Confirm & Review Data** to continue. You can double-check all values on the next screen before anything is sent.`;
+      return "No problem! I'll use standard averages for any missing values.\n\nPress **Confirm & Review Data** — you can edit everything on the next screen before it's sent to the matching model.";
     }
 
     setReadyToConfirm(true);
     return `Thanks! Press **Confirm & Review Data** whenever you're ready. You can still edit everything on the next screen.`;
   }
 
-  async function handleSend(text = inputText, isFile = false) {
+  async function handleSend(text = inputText, isFile = false, imageBase64 = null) {
     if (!text.trim() && !isFile) return;
 
-    const userMsg = isFile ? '📄 [User uploaded a document]' : text;
-    setMessages(prev => [...prev, { id: Date.now(), sender: 'user', text: userMsg }]);
+    setMessages(prev => [...prev, { id: Date.now(), sender: 'user', text: text || inputText }]);
     setInputText('');
     setIsTyping(true);
 
     let currentExtracted = extractedData;
 
     if (isFile) {
-      const rawText = await mockExtractPDFText();
-      const hba1cMatch = rawText.match(/hba1c[\s:]*(\d+\.?\d*)/i);
-      const bpMatch    = rawText.match(/(?:blood pressure|bp|systolic)[\s:]*(\d{2,3})\s*[\/\-]/i);
-      const bmiMatch   = rawText.match(/bmi[\s:]*(\d+\.?\d*)/i);
-      currentExtracted = {
-        hba1c:       hba1cMatch ? parseFloat(hba1cMatch[1]) : null,
-        bp_systolic: bpMatch    ? parseInt(bpMatch[1])      : null,
-        bmi:         bmiMatch   ? parseFloat(bmiMatch[1])   : null,
-        confidence:  computeConfidence(rawText),
-      };
-      setExtractedData(currentExtracted);
+      const { processLabReport } = require('../../api/onDeviceAI');
+      let gemmaResult;
+      
+      if (imageBase64) {
+        // OCR via Gemma Vision conceptually
+        gemmaResult = await processLabReport(null, imageBase64);
+      } else {
+        // PDF text extraction
+        const rawText = await mockExtractPDFText();
+        gemmaResult = await processLabReport(rawText, null);
+      }
+      
+      currentExtracted = gemmaResult;
+      if (!gemmaResult.raw_reply) {
+         setExtractedData(prev => ({ ...prev, ...gemmaResult }));
+      }
     }
 
     const aiResponse = await agentReply(text, isFile, currentExtracted);
@@ -142,20 +113,44 @@ Rules:
     setMessages(prev => [...prev, { id: Date.now(), sender: 'ai', text: aiResponse }]);
   }
 
-  async function handleAttach() {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*'],
-        copyToCacheDirectory: true,
-      });
-
-      if (!result.canceled) {
-        handleSend('Processing document...', true);
-      }
-    } catch (err) {
-      console.error(err);
+  const openCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Camera permission is required.');
+      return;
     }
-  }
+    let result = await ImagePicker.launchCameraAsync({ base64: true, quality: 0.5 });
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      handleSend('📷 [User took a photo of lab report]', true, result.assets[0].base64);
+    }
+  };
+
+  const openGallery = async () => {
+    let result = await ImagePicker.launchImageLibraryAsync({ base64: true, quality: 0.5 });
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      handleSend('🖼️ [User uploaded an image of lab report]', true, result.assets[0].base64);
+    }
+  };
+
+  const openDocument = async () => {
+    let result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf' });
+    if (!result.canceled) {
+      handleSend('📄 [User uploaded a PDF document]', true, null);
+    }
+  };
+
+  const showAttachOptions = () => {
+    Alert.alert(
+      "Upload Lab Report",
+      "Choose an option",
+      [
+        { text: "Take Photo", onPress: openCamera },
+        { text: "Choose from Gallery", onPress: openGallery },
+        { text: "Upload PDF", onPress: openDocument },
+        { text: "Cancel", style: "cancel" }
+      ]
+    );
+  };
 
   function handleConfirm() {
     const finalDraft = {
@@ -219,7 +214,7 @@ Rules:
 
         {/* Input Bar */}
         <View className="flex-row items-center px-4 py-3 bg-white border-t border-[#E0E0E0]">
-          <TouchableOpacity onPress={handleAttach} className="mr-3 bg-[#F4F6F4] p-3 rounded-full">
+          <TouchableOpacity onPress={showAttachOptions} className="mr-3 bg-[#F4F6F4] p-3 rounded-full">
             <Text className="text-xl">📎</Text>
           </TouchableOpacity>
           <TextInput 
@@ -229,7 +224,7 @@ Rules:
             onChangeText={setInputText}
             multiline
           />
-          <TouchableOpacity onPress={() => handleSend(inputText)} className="ml-3 bg-[#1B5E20] p-3 rounded-full w-12 h-12 items-center justify-center">
+          <TouchableOpacity onPress={() => handleSend()} className="ml-3 bg-[#1B5E20] p-3 rounded-full w-12 h-12 items-center justify-center">
             <Text className="text-white text-lg font-bold">➤</Text>
           </TouchableOpacity>
         </View>

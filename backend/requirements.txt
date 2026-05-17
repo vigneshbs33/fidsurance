@@ -4,7 +4,12 @@ xgboost
 pandas
 numpy
 joblib
+scikit-learn
+shap
 python-multipart
 PyJWT
-scikit-learn
 python-dotenv
+requests
+transformers
+torch
+accelerate

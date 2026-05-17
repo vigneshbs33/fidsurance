@@ -36,7 +36,7 @@ export async function upsertProfile(userId, fields) {
 }
 
 /** Save a completed assessment session + recommendation */
-export async function saveAssessmentResult(userId, vitals, riskResult, topPlans) {
+export async function saveAssessmentResult(userId, vitals, _ignored, topPlans) {
   // 1. Insert assessment session (ephemeral vitals)
   const { data: session, error: sessionErr } = await supabase
     .from('assessment_sessions')
@@ -50,8 +50,6 @@ export async function saveAssessmentResult(userId, vitals, riskResult, topPlans)
       has_diabetes: vitals.diabetes === 1,
       has_hypertension: vitals.hypertension === 1,
       chronic_count: vitals.chronic_count,
-      risk_tier: riskResult.risk_tier,
-      risk_score: riskResult.risk_score,
     })
     .select()
     .single();
@@ -64,8 +62,6 @@ export async function saveAssessmentResult(userId, vitals, riskResult, topPlans)
     .insert({
       user_id: userId,
       session_id: session.id,
-      risk_tier: riskResult.risk_tier,
-      risk_score: riskResult.risk_score,
       top_plan_ids: topPlans.map(p => ({ id: p.id, score: p.suitability_score })),
     });
 
